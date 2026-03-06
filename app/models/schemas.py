@@ -1,19 +1,51 @@
 """Pydantic models for API"""
-from pydantic import BaseModel, Field, model_validator
-from typing import Optional, Dict, Any, List
+from pydantic import BaseModel, Field, model_validator, field_validator
+from typing import Optional, Dict, Any, List, Union
 
 class FileContent(BaseModel):
-    """File content model"""
+    """File content model.
+
+    The ``content`` field accepts either a plain string or a list of content
+    blocks (e.g. ``[{"text": "..."}]``) as sent by some MCP clients.
+    Both formats are normalised to a plain string during validation.
+    """
     path: str = Field(..., description="Relative path from /config")
-    content: str = Field(..., description="File content")
+    content: Union[str, List[Any]] = Field(..., description="File content (string or MCP content-block list)")
     create_backup: bool = Field(True, description="Create backup before writing")
     commit_message: Optional[str] = Field(None, description="Custom commit message for Git backup (e.g., 'Fix automation: add motion sensor trigger')")
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalise_content(cls, v):
+        """Accept both plain strings and MCP-style [{'text': '...'}] content blocks."""
+        if isinstance(v, list):
+            parts = []
+            for item in v:
+                if isinstance(item, dict):
+                    parts.append(item.get("text", "") or item.get("content", "") or "")
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "".join(parts)
+        return v
 
 class FileAppend(BaseModel):
     """File append model"""
     path: str
-    content: str
+    content: Union[str, List[Any]] = Field(..., description="Content to append")
     commit_message: Optional[str] = Field(None, description="Custom commit message for Git backup (e.g., 'Add new automation to automations.yaml')")
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def normalise_content(cls, v):
+        if isinstance(v, list):
+            parts = []
+            for item in v:
+                if isinstance(item, dict):
+                    parts.append(item.get("text", "") or item.get("content", "") or "")
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "".join(parts)
+        return v
 
 class HelperCreate(BaseModel):
     """Helper creation model"""
