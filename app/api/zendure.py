@@ -256,43 +256,63 @@ async def get_zendure_diagnostics():
     """
     Full Zendure diagnostics — device data + log tail + status in one call.
 
-    Combines /zendure/devices + /zendure/status + latest log lines.
-    Ideal for the Cursor agent to get a complete picture in a single request.
+    Directly reuses get_zendure_devices() and get_zendure_status() to avoid
+    duplication and ensure consistent data (including solar/output values).
     """
-    import aiohttp
     import os
 
-    SUPERVISOR_TOKEN = os.environ.get('SUPERVISOR_TOKEN', '')
+    # --- Devices + Fleet (reuse /devices logic fully) ---
+    devices_result = await get_zendure_devices()
+    device_summary = [
+        {
+            "device_id": dev["device_id"],
+            "available_kwh": dev.get("available_kwh"),
+            "total_kwh": dev.get("total_kwh"),
+            "soc_pct": dev.get("soc_pct"),
+            "solar_w": dev.get("solar_input_w"),
+            "output_w": dev.get("output_home_w"),
+            "pack_input_w": dev.get("pack_input_w"),
+            "status": dev.get("status"),
+        }
+        for dev in devices_result.get("devices", [])
+    ]
+    fleet = devices_result.get("fleet", {})
+    fleet_avail = fleet.get("available_kwh", 0.0)
+    fleet_total = fleet.get("total_capacity_kwh", 0.0)
+    fleet_soc = fleet.get("soc_pct", 0.0)
 
-    # --- Log tail ---
+    # --- Manager entities (reuse /status) ---
+    status_result = await get_zendure_status()
+    manager_states = {
+        e["entity_id"]: e["state"]
+        for e in status_result.get("manager_entities", [])
+    }
+
+    # --- Log tail (Zendure-filtered) ---
     log_lines = []
     log_source = "unavailable"
 
-    # Try Supervisor host logs
+    SUPERVISOR_TOKEN = os.environ.get('SUPERVISOR_TOKEN', '')
     if SUPERVISOR_TOKEN:
         try:
-            headers = {
-                "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-                "Accept": "text/plain",
-                "Range": "entries=:-2000:2000",
-            }
+            import aiohttp
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     "http://supervisor/host/logs/homeassistant/entries",
-                    headers=headers,
+                    headers={
+                        "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+                        "Accept": "text/plain",
+                        "Range": "entries=:-2000:2000",
+                    },
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status == 200:
                         text = await resp.text()
-                        all_lines = text.splitlines()
-                        log_lines = [l for l in all_lines if "zendure" in l.lower()][-50:]
+                        log_lines = [l for l in text.splitlines() if "zendure" in l.lower()][-50:]
                         log_source = "supervisor_host_logs"
-                    else:
-                        logger.warning(f"Supervisor host/logs returned {resp.status}")
         except Exception as e:
-            logger.warning(f"Could not fetch logs for diagnostics: {e}")
+            logger.debug(f"Supervisor logs unavailable: {e}")
 
-    # Fallback: WebSocket system_log/list
     if not log_lines:
         try:
             from app.services.ha_websocket import get_ws_client
@@ -313,66 +333,6 @@ async def get_zendure_diagnostics():
                     log_source = "websocket_system_log"
         except Exception as e:
             logger.warning(f"WebSocket system_log fetch failed in diagnostics: {e}")
-
-    # Get devices and status
-    try:
-        all_states = await ha_client.get_states()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch HA states: {e}")
-
-    # --- Devices (reuse logic from /devices) ---
-    zendure_states = [
-        s for s in all_states
-        if any(
-            s["entity_id"].split(".", 1)[-1].endswith(f"_{sfx}")
-            for sfx in ZENDURE_SENSOR_MAP
-            if s["entity_id"].startswith("sensor.")
-        )
-    ]
-    devices: Dict[str, Dict] = {}
-    for state in zendure_states:
-        entity_id = state["entity_id"]
-        prefix = _extract_device_prefix(entity_id)
-        if not prefix:
-            continue
-        if prefix not in devices:
-            devices[prefix] = {"device_id": prefix, "sensors": {}}
-        name_part = entity_id.split(".", 1)[-1]
-        for suffix in ZENDURE_SENSOR_MAP:
-            if name_part.endswith(f"_{suffix}"):
-                val = _safe_float(state["state"]) if state["state"] not in ("unknown", "unavailable") else None
-                devices[prefix]["sensors"][suffix] = val
-                break
-
-    device_summary = []
-    fleet_avail = 0.0
-    fleet_total = 0.0
-    for prefix, dev in sorted(devices.items()):
-        s = dev["sensors"]
-        avail = s.get("available_kwh")
-        total = s.get("total_kwh")
-        soc = round(avail / total * 100, 1) if avail is not None and total else None
-        device_summary.append({
-            "device_id": prefix,
-            "available_kwh": avail,
-            "total_kwh": total,
-            "soc_pct": soc,
-            "solar_w": s.get("solar_input_power"),
-            "output_w": s.get("output_home_power"),
-        })
-        if avail:
-            fleet_avail += avail
-        if total:
-            fleet_total += total
-
-    fleet_soc = round(fleet_avail / fleet_total * 100, 1) if fleet_total > 0 else 0.0
-
-    # --- Manager entities ---
-    manager_states = {
-        s["entity_id"]: s["state"]
-        for s in all_states
-        if "zendure_manager" in s["entity_id"]
-    }
 
     errors = [l for l in log_lines if "ERROR" in l]
     warnings = [l for l in log_lines if "WARNING" in l]
