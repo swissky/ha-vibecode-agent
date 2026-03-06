@@ -20,7 +20,7 @@ homeassistant_api: true
 auth_api: true
 
 options:
-  port: 8099
+  port: 8100
   log_level: info
   git_versioning_auto: true
   max_backups: 30
@@ -34,16 +34,16 @@ schema:
   api_key: str?
 
 ports:
-  8099/tcp: 8099
+  8100/tcp: 8100
 
 ports_description:
-  8099/tcp: HA Vibecode Agent API
+  8100/tcp: HA Vibecode Agent API (swissky fork)
 
 map:
   - config:rw
 
 ingress: true
-ingress_port: 8099
+ingress_port: 8100
 panel_icon: mdi:key-variant
 panel_title: API Key
 
