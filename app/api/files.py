@@ -122,24 +122,24 @@ def _validate_automations_structure(path: str, content: str) -> None:
 
 @router.get("/list")
 async def list_files(
- directory: str = Query("", description="Directory to list (relative to /config)"),
- pattern: str = Query("*.yaml", description="File pattern (e.g., '*.yaml', '*.py', '*.log', '*')")
+    directory: str = Query("", description="Directory to list (relative to /config)"),
+    pattern: str = Query("*.yaml", description="File pattern (e.g., '*.yaml', '*.py', '*.log', '*')")
 ):
- """
- List files in directory
+    """
+    List files in directory
 
- **Pattern examples:**
- - `*.yaml` (default) – all YAML config files
- - `*.log` – log files (home-assistant.log etc.)
- - `*.py` – Python files (custom_components)
- - `*` – all files
- 
- Examples:
- - `/api/files/list` - List all YAML files
- - `/api/files/list?directory=custom_components` - List files in custom_components
- - `/api/files/list?pattern=*.py` - List all Python files
- - `/api/files/list?pattern=*.log` - List log files
- """
+    **Pattern examples:**
+    - `*.yaml` (default) – all YAML config files
+    - `*.log` – log files (home-assistant.log etc.)
+    - `*.py` – Python files (custom_components)
+    - `*` – all files
+
+    Examples:
+    - `/api/files/list` - List all YAML files
+    - `/api/files/list?directory=custom_components` - List files in custom_components
+    - `/api/files/list?pattern=*.py` - List all Python files
+    - `/api/files/list?pattern=*.log` - List log files
+    """
     try:
         files = await file_manager.list_files(directory, pattern)
         logger.info(f"Listed {len(files)} files in '{directory}' with pattern '{pattern}'")
@@ -177,21 +177,21 @@ async def read_file(path: str = Query(..., description="File path relative to /c
 
 @router.post("/write", response_model=Response)
 async def write_file(file_data: FileContent):
- """
- Write or create file
- 
- **Automatically creates backup if file exists!**
- **Note:** Does NOT auto-reload. Use /api/system/reload after changes.
- 
- For YAML files (e.g. `automations.yaml`, `scripts.yaml`), this endpoint performs:
- - Basic YAML syntax validation (rejects invalid YAML before writing).
- - Additional safety checks for known files like `automations.yaml`
- (e.g. detect duplicate automation ids).
- 
- The `content` field accepts either a plain string or a list of content blocks
- (e.g. `[{"text": "..."}]` from some MCP clients). Both formats are handled.
- 
- Example request:
+    """
+    Write or create file
+
+    **Automatically creates backup if file exists!**
+    **Note:** Does NOT auto-reload. Use /api/system/reload after changes.
+
+    For YAML files (e.g. `automations.yaml`, `scripts.yaml`), this endpoint performs:
+    - Basic YAML syntax validation (rejects invalid YAML before writing).
+    - Additional safety checks for known files like `automations.yaml`
+      (e.g. detect duplicate automation ids).
+
+    The `content` field accepts either a plain string or a list of content blocks
+    (e.g. `[{"text": "..."}]` from some MCP clients). Both formats are handled.
+
+    Example request:
     ```json
     {
       "path": "scripts.yaml",
@@ -199,23 +199,12 @@ async def write_file(file_data: FileContent):
       "create_backup": true
     }
     ```
- """
- try:
- # Defensive: some MCP clients send content as [{"text": "..."}] instead of a plain string.
- # Normalise to string before any further processing.
- if isinstance(file_data.content, list):
- parts = []
- for item in file_data.content:
- if isinstance(item, dict):
- parts.append(item.get("text", "") or item.get("content", "") or "")
- elif isinstance(item, str):
- parts.append(item)
- file_data.content = "".join(parts)
- logger.debug("write_file: normalised content from list to string")
-
- # YAML safety checks (syntax + known domain-specific validations)
- _validate_yaml_syntax(file_data.path, file_data.content)
- _validate_automations_structure(file_data.path, file_data.content)
+    """
+    try:
+        # YAML safety checks (syntax + known domain-specific validations)
+        # Content normalisation (list → string) already handled by FileContent.normalise_content
+        _validate_yaml_syntax(file_data.path, file_data.content)
+        _validate_automations_structure(file_data.path, file_data.content)
 
         result = await file_manager.write_file(
             file_data.path,
@@ -223,14 +212,12 @@ async def write_file(file_data: FileContent):
             file_data.create_backup,
             file_data.commit_message
         )
-        
-        # Commit is already done in file_manager.write_file() if git_versioning_auto is enabled
-        # Just rename the key for consistency
+
         if result.get('commit'):
             result['git_commit'] = result['commit']
-        
+
         logger.info(f"File written: {file_data.path}. Remember to reload components if needed!")
-        
+
         return Response(success=True, message=f"File written: {file_data.path}", data=result)
     except Exception as e:
         logger.error(f"Failed to write file: {e}")
